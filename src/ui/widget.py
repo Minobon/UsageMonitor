@@ -489,6 +489,12 @@ class UsageWidget:
         self._antigravity_email = email
         self._antigravity_plan = plan
 
+    def notify_poll_start(self):
+        """手動更新開始を通知する。タイマーをリセットして再描画する。"""
+        self._last_poll_time = None
+        self.timer.stop()
+        self.draw()
+
     def notify_poll_complete(self, interval_sec):
         """ポーリング完了をウィジェットに通知する。タイマーアニメーションを開始する。"""
         self.timer.notify_poll_complete(interval_sec)

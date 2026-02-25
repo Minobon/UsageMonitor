@@ -154,6 +154,7 @@ class App:
         """ユーザーによる手動更新。"""
         if self._poll_timer:
             self.root.after_cancel(self._poll_timer)
+        self.widget.notify_poll_start()
         self._do_poll()
 
     def _show_widget(self):
