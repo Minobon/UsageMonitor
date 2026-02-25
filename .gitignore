@@ -1,0 +1,21 @@
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+*.spec
+build_icon.ico
+
+# 認証情報・設定ファイル
+.env
+.env.*
+*.env
+.credentials.json
+credentials.json
+auth.json
+*_settings.json
+.claude/
