@@ -20,8 +20,8 @@
 ## Build & Launch Check 手順
 ```bash
 # 1. VERSION を更新
-# 2. ビルド (venv内のpyinstaller使用)
-.venv/Scripts/python scripts/gen_icon.py 2>&1 && .venv/Scripts/pyinstaller --onefile -w --name "Usage_Monitor_v$(cat VERSION | tr -d '\r')" --icon build_icon.ico --add-data "assets;assets" --add-data "VERSION;." --hidden-import pystray._win32 --exclude-module unittest --exclude-module test --exclude-module pip --exclude-module xml.sax --exclude-module xmlrpc --exclude-module sqlite3 --exclude-module multiprocessing --exclude-module concurrent --exclude-module asyncio --exclude-module lib2to3 --exclude-module pydoc --exclude-module doctest --exclude-module PIL._avif --exclude-module PIL._imagingft --exclude-module PIL._webp --exclude-module PIL._imagingcms --exclude-module PIL._imagingmorph --exclude-module PIL._imagingmath --exclude-module PIL.ImageFont --exclude-module PIL.ImageDraw --exclude-module PIL.WebPImagePlugin --exclude-module PIL.AvifImagePlugin --exclude-module setuptools --exclude-module pkg_resources --exclude-module _distutils_hack --exclude-module distutils --clean -y src/main.py 2>&1
+# 2. ビルド (build.bat を使用。venv作成・PyInstallerインストールも自動)
+cmd.exe //C ".\\build.bat"
 
 # 3. 起動チェック (5秒待ってプロセス確認)
 "./dist/Usage_Monitor_v$(cat VERSION | tr -d '\r').exe" &
