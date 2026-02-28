@@ -3,8 +3,10 @@
 import time
 
 from config import (
-    BG_BORDER, TIMER_DOT_ACTIVE, TIMER_DOT_SPENT,
+    BG_BORDER, SUB_TEXT_COLOR, TIMER_DOT_ACTIVE, TIMER_DOT_SPENT,
+    FONT_FAMILY, FONT_SIZE_TINY,
 )
+from ui.tray import _load_version
 
 
 class TimerIndicator:
@@ -37,13 +39,18 @@ class TimerIndicator:
         c.create_line(us(14), sep_y, width - us(14), sep_y,
                        fill=BG_BORDER, width=1, tags="timer")
 
-        # ドット配置
+        # ドット配置（左寄せ）
         num_dots = 10
         dot_r = us(3)
         center_gap = us(22)
-        total_span = (num_dots - 1) * center_gap
-        start_x = (width - total_span) // 2
+        start_x = us(30)
         center_y = sep_y + us(12)
+
+        # バージョン表示（右端）
+        version = _load_version()
+        c.create_text(width - us(14), center_y, text=f"v{version}",
+                       fill=SUB_TEXT_COLOR, anchor="e",
+                       font=(FONT_FAMILY, w._fs(FONT_SIZE_TINY)), tags="timer")
 
         now = time.time()
 
