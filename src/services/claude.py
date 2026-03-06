@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 
 import requests
 
-from config import CREDENTIALS_PATH, API_BASE_URL, TOKEN_ENDPOINT, USAGE_ENDPOINT, ANTHROPIC_BETA
+from config import CREDENTIALS_PATH, API_BASE_URL, TOKEN_BASE_URL, TOKEN_ENDPOINT, OAUTH_CLIENT_ID, USAGE_ENDPOINT, ANTHROPIC_BETA
 from models import UsageData, ProfileData
 
 PROFILE_ENDPOINT = "/api/oauth/profile"
@@ -58,14 +58,14 @@ def _save_tokens(tokens: AuthTokens) -> None:
 
 def _refresh_access_token(tokens: AuthTokens) -> AuthTokens:
     """リフレッシュトークンを使ってアクセストークンを更新する。"""
-    url = f"{API_BASE_URL}{TOKEN_ENDPOINT}"
+    url = f"{TOKEN_BASE_URL}{TOKEN_ENDPOINT}"
     resp = requests.post(
         url,
-        data={
+        json={
             "grant_type": "refresh_token",
             "refresh_token": tokens.refresh_token,
+            "client_id": OAUTH_CLIENT_ID,
         },
-        headers={"Content-Type": "application/x-www-form-urlencoded"},
         timeout=15,
     )
     resp.raise_for_status()
@@ -127,7 +127,21 @@ def fetch_usage() -> UsageData | None:
                 return None
 
         if resp.status_code == 429:
-            return UsageData.with_error("Rate limited")
+            # レートリミットはアクセストークン単位。リフレッシュしてリトライ
+            try:
+                tokens = _refresh_access_token(tokens)
+                resp = requests.get(
+                    f"{API_BASE_URL}{USAGE_ENDPOINT}",
+                    headers={
+                        "Authorization": f"Bearer {tokens.access_token}",
+                        "anthropic-beta": ANTHROPIC_BETA,
+                    },
+                    timeout=15,
+                )
+                if resp.status_code == 429:
+                    return UsageData.with_error("Rate limited")
+            except Exception:
+                return UsageData.with_error("Rate limited")
 
         if resp.status_code == 404:
             # 有効な使用ウィンドウなし - 使用率0%として扱う

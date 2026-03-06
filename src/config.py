@@ -7,7 +7,9 @@ import ctypes
 # API設定
 API_BASE_URL = "https://api.anthropic.com"
 USAGE_ENDPOINT = "/api/oauth/usage"
-TOKEN_ENDPOINT = "/api/oauth/token"
+TOKEN_BASE_URL = "https://console.anthropic.com"
+TOKEN_ENDPOINT = "/v1/oauth/token"
+OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 ANTHROPIC_BETA = "oauth-2025-04-20"
 
 # ポーリング設定
