@@ -83,12 +83,34 @@ def _refresh_access_token(tokens: AuthTokens) -> AuthTokens:
 
 
 def _get_valid_token() -> tuple[str, AuthTokens]:
-    """有効なアクセストークンを返す。期限切れの場合は更新する。"""
+    """有効なアクセストークンを返す。期限切れの場合のみ更新する。"""
     tokens = _load_tokens()
     if tokens.is_expired:
         log.info("Token expired, refreshing...")
         tokens = _refresh_access_token(tokens)
     return tokens.access_token, tokens
+
+
+def _reload_and_retry_request(old_tokens: AuthTokens, url: str, headers_extra: dict) -> tuple[requests.Response, AuthTokens]:
+    """ファイルからトークンを再読み込みしてリトライ。トークンが変わっていなければリフレッシュする。"""
+    reloaded = _load_tokens()
+    if reloaded.access_token != old_tokens.access_token:
+        # Claude Codeが既にリフレッシュ済み → そのトークンを使う
+        log.info("Token updated by another process, reusing")
+        tokens = reloaded
+    else:
+        # トークンが同じ → 自前でリフレッシュ
+        log.info("Token unchanged, refreshing ourselves")
+        tokens = _refresh_access_token(reloaded)
+    resp = requests.get(
+        url,
+        headers={
+            "Authorization": f"Bearer {tokens.access_token}",
+            **headers_extra,
+        },
+        timeout=15,
+    )
+    return resp, tokens
 
 
 # --- 外部公開API ---
@@ -107,40 +129,22 @@ def fetch_usage() -> UsageData | None:
             },
             timeout=15,
         )
-        if resp.status_code == 401:
-            log.warning("401 received, attempting token refresh")
+        if resp.status_code in (401, 429):
+            log.warning("%d received, reloading token and retrying", resp.status_code)
             try:
-                tokens = _refresh_access_token(tokens)
-                resp = requests.get(
-                    f"{API_BASE_URL}{USAGE_ENDPOINT}",
-                    headers={
-                        "Authorization": f"Bearer {tokens.access_token}",
-                        "anthropic-beta": ANTHROPIC_BETA,
-                    },
-                    timeout=15,
+                usage_url = f"{API_BASE_URL}{USAGE_ENDPOINT}"
+                resp, tokens = _reload_and_retry_request(
+                    tokens, usage_url, {"anthropic-beta": ANTHROPIC_BETA},
                 )
             except Exception:
-                log.info("Claude auth failed, hiding section")
-                return None
+                if resp.status_code == 401:
+                    log.info("Claude auth failed, hiding section")
+                    return None
+                return UsageData.with_error("Rate limited")
             if resp.status_code == 401:
-                log.info("Claude auth still 401 after refresh, hiding section")
+                log.info("Claude auth still 401 after retry, hiding section")
                 return None
-
-        if resp.status_code == 429:
-            # レートリミットはアクセストークン単位。リフレッシュしてリトライ
-            try:
-                tokens = _refresh_access_token(tokens)
-                resp = requests.get(
-                    f"{API_BASE_URL}{USAGE_ENDPOINT}",
-                    headers={
-                        "Authorization": f"Bearer {tokens.access_token}",
-                        "anthropic-beta": ANTHROPIC_BETA,
-                    },
-                    timeout=15,
-                )
-                if resp.status_code == 429:
-                    return UsageData.with_error("Rate limited")
-            except Exception:
+            if resp.status_code == 429:
                 return UsageData.with_error("Rate limited")
 
         if resp.status_code == 404:
