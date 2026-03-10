@@ -2,13 +2,12 @@
 
 import json
 import os
-import time
 import logging
 from dataclasses import dataclass, field
 
 import requests
 
-from config import CREDENTIALS_PATH, API_BASE_URL, TOKEN_BASE_URL, TOKEN_ENDPOINT, OAUTH_CLIENT_ID, USAGE_ENDPOINT, ANTHROPIC_BETA
+from config import CREDENTIALS_PATH, API_BASE_URL, USAGE_ENDPOINT, ANTHROPIC_BETA
 from models import UsageData, ProfileData
 
 PROFILE_ENDPOINT = "/api/oauth/profile"
@@ -19,20 +18,12 @@ log = logging.getLogger(__name__)
 @dataclass
 class AuthTokens:
     access_token: str
-    refresh_token: str
-    expires_at: int  # ミリ秒エポック
     scopes: list = field(default_factory=list)
-
-    @property
-    def is_expired(self) -> bool:
-        return time.time() * 1000 >= self.expires_at - 60_000  # 1分のマージン
 
     @classmethod
     def from_dict(cls, data: dict) -> "AuthTokens":
         return cls(
             access_token=data["accessToken"],
-            refresh_token=data["refreshToken"],
-            expires_at=data["expiresAt"],
             scopes=data.get("scopes", []),
         )
 
@@ -45,72 +36,29 @@ def _load_tokens() -> AuthTokens:
     return AuthTokens.from_dict(oauth)
 
 
-def _save_tokens(tokens: AuthTokens) -> None:
-    """更新されたトークンを認証情報ファイルに保存する。"""
-    with open(CREDENTIALS_PATH, "r", encoding="utf-8") as f:
-        data = json.load(f)
-    data["claudeAiOauth"]["accessToken"] = tokens.access_token
-    data["claudeAiOauth"]["refreshToken"] = tokens.refresh_token
-    data["claudeAiOauth"]["expiresAt"] = tokens.expires_at
-    with open(CREDENTIALS_PATH, "w", encoding="utf-8") as f:
-        json.dump(data, f)
-
-
-def _refresh_access_token(tokens: AuthTokens) -> AuthTokens:
-    """リフレッシュトークンを使ってアクセストークンを更新する。"""
-    url = f"{TOKEN_BASE_URL}{TOKEN_ENDPOINT}"
-    resp = requests.post(
-        url,
-        json={
-            "grant_type": "refresh_token",
-            "refresh_token": tokens.refresh_token,
-            "client_id": OAUTH_CLIENT_ID,
-        },
-        timeout=15,
-    )
-    resp.raise_for_status()
-    body = resp.json()
-    expires_in = body.get("expires_in", 3600)
-    new_tokens = AuthTokens(
-        access_token=body["access_token"],
-        refresh_token=body.get("refresh_token", tokens.refresh_token),
-        expires_at=int(time.time() * 1000) + expires_in * 1000,
-        scopes=tokens.scopes,
-    )
-    _save_tokens(new_tokens)
-    log.info("Token refreshed successfully")
-    return new_tokens
-
-
 def _get_valid_token() -> tuple[str, AuthTokens]:
-    """有効なアクセストークンを返す。期限切れの場合のみ更新する。"""
+    """ファイルからトークンを読み込んで返す。リフレッシュはClaude Codeに任せる。"""
     tokens = _load_tokens()
-    if tokens.is_expired:
-        log.info("Token expired, refreshing...")
-        tokens = _refresh_access_token(tokens)
     return tokens.access_token, tokens
 
 
-def _reload_and_retry_request(old_tokens: AuthTokens, url: str, headers_extra: dict) -> tuple[requests.Response, AuthTokens]:
-    """ファイルからトークンを再読み込みしてリトライ。トークンが変わっていなければリフレッシュする。"""
+def _reload_and_retry_request(old_tokens: AuthTokens, url: str, headers_extra: dict) -> tuple[requests.Response, AuthTokens] | None:
+    """ファイルからトークンを再読み込みしてリトライ。他プロセスがリフレッシュ済みの場合のみ。"""
     reloaded = _load_tokens()
-    if reloaded.access_token != old_tokens.access_token:
-        # Claude Codeが既にリフレッシュ済み → そのトークンを使う
-        log.info("Token updated by another process, reusing")
-        tokens = reloaded
-    else:
-        # トークンが同じ → 自前でリフレッシュ
-        log.info("Token unchanged, refreshing ourselves")
-        tokens = _refresh_access_token(reloaded)
+    if reloaded.access_token == old_tokens.access_token:
+        # 誰もリフレッシュしていない → 諦める
+        log.info("Token unchanged, waiting for Claude Code to refresh")
+        return None
+    log.info("Token updated by another process, reusing")
     resp = requests.get(
         url,
         headers={
-            "Authorization": f"Bearer {tokens.access_token}",
+            "Authorization": f"Bearer {reloaded.access_token}",
             **headers_extra,
         },
         timeout=15,
     )
-    return resp, tokens
+    return resp, reloaded
 
 
 # --- 外部公開API ---
@@ -129,23 +77,23 @@ def fetch_usage() -> UsageData | None:
             },
             timeout=15,
         )
-        if resp.status_code in (401, 429):
-            log.warning("%d received, reloading token and retrying", resp.status_code)
+        if resp.status_code == 429:
+            return UsageData.with_error("Rate limited")
+
+        if resp.status_code == 401:
+            log.warning("401 received, reloading token from file")
             try:
                 usage_url = f"{API_BASE_URL}{USAGE_ENDPOINT}"
-                resp, tokens = _reload_and_retry_request(
+                result = _reload_and_retry_request(
                     tokens, usage_url, {"anthropic-beta": ANTHROPIC_BETA},
                 )
             except Exception:
-                if resp.status_code == 401:
-                    log.info("Claude auth failed, hiding section")
-                    return None
-                return UsageData.with_error("Rate limited")
+                result = None
+            if result is None:
+                return UsageData.with_error("Token expired")
+            resp, tokens = result
             if resp.status_code == 401:
-                log.info("Claude auth still 401 after retry, hiding section")
-                return None
-            if resp.status_code == 429:
-                return UsageData.with_error("Rate limited")
+                return UsageData.with_error("Token expired")
 
         if resp.status_code == 404:
             # 有効な使用ウィンドウなし - 使用率0%として扱う
